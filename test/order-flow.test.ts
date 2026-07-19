@@ -1,17 +1,14 @@
-// import * as cdk from 'aws-cdk-lib/core';
-// import { Template } from 'aws-cdk-lib/assertions';
-// import * as OrderFlow from '../lib/order-flow-stack';
+import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
+import { OrderFlowStack } from '../lib/order-flow-stack';
 
-// example test. To run these tests, uncomment this file along with the
-// example resource in lib/order-flow-stack.ts
-test('SQS Queue Created', () => {
-//   const app = new cdk.App();
-//     // WHEN
-//   const stack = new OrderFlow.OrderFlowStack(app, 'MyTestStack');
-//     // THEN
-//   const template = Template.fromStack(stack);
+// Smoke test: proves the CDK test harness works end to end.
+// Nothing is built yet, so we assert zero app resources.
+// This exercises the exact Template API we'll use for real in E2-E4.
+test('stack synthesizes cleanly (no resources yet)', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
 
-//   template.hasResourceProperties('AWS::SQS::Queue', {
-//     VisibilityTimeout: 300
-//   });
+  template.resourceCountIs('AWS::SQS::Queue', 0);
 });
