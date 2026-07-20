@@ -12,3 +12,14 @@ test('stack synthesizes cleanly (no resources yet)', () => {
 
   template.resourceCountIs('AWS::SQS::Queue', 0);
 });
+
+test('creates the custom EventBridge bus', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
+
+  template.resourceCountIs('AWS::Events::EventBus', 1);
+  template.hasResourceProperties('AWS::Events::EventBus', {
+    Name: 'order-flow-bus',
+  });
+});
