@@ -2,15 +2,13 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { OrderFlowStack } from '../lib/order-flow-stack';
 
-// Smoke test: proves the CDK test harness works end to end.
-// Nothing is built yet, so we assert zero app resources.
-// This exercises the exact Template API we'll use for real in E2-E4.
-test('stack synthesizes cleanly (no resources yet)', () => {
+// Smoke test: proves the stack synthesizes and the CDK test harness works end to end.
+test('stack synthesizes without error', () => {
     const app = new cdk.App();
     const stack = new OrderFlowStack(app, 'TestStack');
     const template = Template.fromStack(stack);
 
-    template.resourceCountIs('AWS::SQS::Queue', 0);
+    expect(template.toJSON().Resources).toBeDefined();
 });
 
 test('creates the custom EventBridge bus', () => {
@@ -120,4 +118,19 @@ test('fans out OrderPlaced to two independent consumers with table write access'
     });
 });
 
+test('creates an inventory queue with a dead-letter queue (maxReceiveCount 3)', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
 
+  // two queues: the work queue + its DLQ
+  template.resourceCountIs('AWS::SQS::Queue', 2);
+
+  // the work queue redrives to the DLQ after 3 failed receives
+  template.hasResourceProperties('AWS::SQS::Queue', {
+    RedrivePolicy: Match.objectLike({
+      maxReceiveCount: 3,
+      deadLetterTargetArn: Match.anyValue(),
+    }),
+  });
+});

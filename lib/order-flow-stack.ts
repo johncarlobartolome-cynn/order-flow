@@ -6,6 +6,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
@@ -31,6 +32,22 @@ export class OrderFlowStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // learning project: clean teardown
     });
     new cdk.CfnOutput(this, 'TableName', { value: table.tableName });
+
+    // --- Inventory queue + DLQ (T18) -------------------------------------
+    // DLQ: messages that fail processing maxReceiveCount times land here instead
+    // of vanishing. This is the "nothing disappears" safety net.
+    const inventoryDlq = new sqs.Queue(this, 'InventoryDlq', {
+      retentionPeriod: cdk.Duration.days(14),
+    });
+
+    // Main work queue: buffers OrderPlaced events for the inventory worker.
+    // After 3 failed receives, a message is redriven to the DLQ.
+    const inventoryQueue = new sqs.Queue(this, 'InventoryQueue', {
+      visibilityTimeout: cdk.Duration.seconds(30),
+      deadLetterQueue: { queue: inventoryDlq, maxReceiveCount: 3 },
+    });
+    new cdk.CfnOutput(this, 'InventoryQueueUrl', { value: inventoryQueue.queueUrl });
+    new cdk.CfnOutput(this, 'InventoryDlqUrl', { value: inventoryDlq.queueUrl });
 
 
     // --- Producer Lambda + API (T8) --------------------------------------
