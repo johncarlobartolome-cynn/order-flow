@@ -1,21 +1,55 @@
-import * as cdk from 'aws-cdk-lib/core';
+import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import * as path from 'node:path';
 import * as events from 'aws-cdk-lib/aws-events';
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 
 export class OrderFlowStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Custom event bus: isolates this app's events from the account default bus.
-    // The producer Lambda (T7) will PutEvents here; rules (E3/E4) route OrderPlaced to consumers.
+    // --- Custom event bus (T6) -------------------------------------------
     const bus = new events.EventBus(this, 'OrderFlowBus', {
       eventBusName: 'order-flow-bus',
     });
-
-    // Outputs make the bus easy to find from the CLI + wire up later.
     new cdk.CfnOutput(this, 'OrderFlowBusName', { value: bus.eventBusName });
     new cdk.CfnOutput(this, 'OrderFlowBusArn', { value: bus.eventBusArn });
 
+    // --- Producer Lambda + API (T8) --------------------------------------
+    const createOrderFn = new NodejsFunction(this, 'CreateOrderFn', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../lambda/create-order/index.ts'),
+      handler: 'handler',
+      environment: { EVENT_BUS_NAME: bus.eventBusName },
+    });
+
+    // Least privilege: only events:PutEvents, only to our bus.
+    bus.grantPutEventsTo(createOrderFn);
+
+    const httpApi = new HttpApi(this, 'OrderFlowApi');
+    httpApi.addRoutes({
+      path: '/orders',
+      methods: [HttpMethod.POST],
+      integration: new HttpLambdaIntegration('CreateOrderIntegration', createOrderFn),
+    });
+    new cdk.CfnOutput(this, 'ApiUrl', { value: httpApi.apiEndpoint });
+
+    // --- Audit rule: see events on the bus (T9) --------------------------
+    const auditLog = new logs.LogGroup(this, 'OrderEventsAuditLog', {
+      logGroupName: '/aws/events/order-flow-audit',
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new events.Rule(this, 'AuditAllOrderEvents', {
+      eventBus: bus,
+      eventPattern: { source: ['orders.api'] },
+      targets: [new targets.CloudWatchLogGroup(auditLog)],
+    });
   }
 }
