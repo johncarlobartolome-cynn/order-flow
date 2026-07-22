@@ -101,6 +101,12 @@ test('fans out OrderPlaced to two independent consumers with table write access'
     });
     expect(Object.keys(orderPlacedRules)).toHaveLength(2);
 
+    // the two OrderPlaced rules must target two DISTINCT Lambdas
+    const targetArns = Object.values(orderPlacedRules).map(
+        (r: any) => JSON.stringify(r.Properties.Targets[0].Arn),
+    );
+    expect(new Set(targetArns).size).toBe(2);
+
     // consumers can write to the table (grantWriteData → includes dynamodb:PutItem)
     template.hasResourceProperties('AWS::IAM::Policy', {
         PolicyDocument: Match.objectLike({

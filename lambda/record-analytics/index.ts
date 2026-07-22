@@ -21,6 +21,13 @@ export const handler = async (
   event: EventBridgeEvent<'OrderPlaced', OrderPlaced>,
 ): Promise<void> => {
   const order = event.detail;
+
+  // Guard a malformed event: retrying a bad shape never succeeds, so log + skip.
+  if (!order?.orderId || !Array.isArray(order.items)) {
+    console.error('Skipping malformed OrderPlaced event', { id: event.id });
+    return;
+  }
+
   const itemCount = order.items.length;
   const totalQty = order.items.reduce((sum, it) => sum + it.qty, 0);
 

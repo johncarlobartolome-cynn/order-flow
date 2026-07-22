@@ -22,6 +22,12 @@ export const handler = async (
 ): Promise<void> => {
   const order = event.detail;
 
+  // Guard a malformed event: retrying a bad shape never succeeds, so log + skip.
+  if (!order?.orderId || !order.customerEmail) {
+    console.error('Skipping malformed OrderPlaced event', { id: event.id });
+    return;
+  }
+
   // Mock "send email": a real system calls SES here. We just record that we did.
   const message = `Order ${order.orderId} confirmed for ${order.customerEmail}`;
 

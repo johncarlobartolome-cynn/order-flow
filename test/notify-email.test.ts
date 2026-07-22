@@ -29,3 +29,9 @@ test('records an email status item for the order', async () => {
     to: 'buyer@example.com',
   });
 });
+
+test('skips a malformed event without writing', async () => {
+  ddbMock.on(PutCommand).resolves({});
+  await handler(orderEvent({ customerEmail: 'x@y.com' })); // no orderId / items
+  expect(ddbMock.commandCalls(PutCommand)).toHaveLength(0);
+});

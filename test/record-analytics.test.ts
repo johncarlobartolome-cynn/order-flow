@@ -27,3 +27,21 @@ test('records analytics totals for the order', async () => {
     totalQty: 5,
   });
 });
+
+test('skips a malformed event without writing', async () => {
+  ddbMock.on(PutCommand).resolves({});
+  await handler(orderEvent({ customerEmail: 'x@y.com' }));
+  expect(ddbMock.commandCalls(PutCommand)).toHaveLength(0);
+});
+
+test('counts a single-item order correctly', async () => {
+  ddbMock.on(PutCommand).resolves({});
+  await handler(orderEvent({
+    orderId: 'o-3',
+    items: [{ sku: 'Z', qty: 5 }],
+    customerEmail: 'a@b.com',
+    placedAt: '2026-07-22T00:00:00Z',
+  }));
+  const item = ddbMock.commandCalls(PutCommand)[0].args[0].input.Item;
+  expect(item).toMatchObject({ itemCount: 1, totalQty: 5 });
+});
