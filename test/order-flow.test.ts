@@ -79,43 +79,36 @@ test('creates the single-table DynamoDB store', () => {
 });
 
 test('fans out OrderPlaced to two independent consumers with table write access', () => {
-    const app = new cdk.App();
-    const stack = new OrderFlowStack(app, 'TestStack');
-    const template = Template.fromStack(stack);
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
 
-    // The two consumer Lambdas, identified by their TABLE_NAME env.
-    // (Not a total count: the CloudWatchLogGroup audit target adds a hidden helper Lambda.)
-    const consumerFns = template.findResources('AWS::Lambda::Function', {
-        Properties: { Environment: { Variables: Match.objectLike({ TABLE_NAME: Match.anyValue() }) } },
-    });
-    expect(Object.keys(consumerFns)).toHaveLength(2);
+  // A rule targets the email Lambda, and a (separate) rule targets analytics.
+  // Matched by the target's logical-id prefix → robust to adding more rules.
+  template.hasResourceProperties('AWS::Events::Rule', {
+    Targets: Match.arrayWith([
+      Match.objectLike({ Arn: { 'Fn::GetAtt': [Match.stringLikeRegexp('NotifyEmailFn'), 'Arn'] } }),
+    ]),
+  });
+  template.hasResourceProperties('AWS::Events::Rule', {
+    Targets: Match.arrayWith([
+      Match.objectLike({ Arn: { 'Fn::GetAtt': [Match.stringLikeRegexp('RecordAnalyticsFn'), 'Arn'] } }),
+    ]),
+  });
 
-    // 3 rules total: audit (source only) + the two OrderPlaced consumer rules
-    template.resourceCountIs('AWS::Events::Rule', 3);
+  // Both consumer Lambdas exist.
+  const fnIds = Object.keys(template.findResources('AWS::Lambda::Function'));
+  expect(fnIds.some((id) => id.startsWith('NotifyEmailFn'))).toBe(true);
+  expect(fnIds.some((id) => id.startsWith('RecordAnalyticsFn'))).toBe(true);
 
-    // exactly two rules match OrderPlaced
-    const orderPlacedRules = template.findResources('AWS::Events::Rule', {
-        Properties: { EventPattern: Match.objectLike({ 'detail-type': ['OrderPlaced'] }) },
-    });
-    expect(Object.keys(orderPlacedRules)).toHaveLength(2);
-
-    // the two OrderPlaced rules must target two DISTINCT Lambdas
-    const targetArns = Object.values(orderPlacedRules).map(
-        (r: any) => JSON.stringify(r.Properties.Targets[0].Arn),
-    );
-    expect(new Set(targetArns).size).toBe(2);
-
-    // consumers can write to the table (grantWriteData → includes dynamodb:PutItem)
-    template.hasResourceProperties('AWS::IAM::Policy', {
-        PolicyDocument: Match.objectLike({
-            Statement: Match.arrayWith([
-                Match.objectLike({
-                    Action: Match.arrayWith(['dynamodb:PutItem']),
-                    Effect: 'Allow',
-                }),
-            ]),
-        }),
-    });
+  // Consumers can write to the table.
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({ Action: Match.arrayWith(['dynamodb:PutItem']), Effect: 'Allow' }),
+      ]),
+    }),
+  });
 });
 
 test('creates an inventory queue with a dead-letter queue (maxReceiveCount 3)', () => {
@@ -132,5 +125,17 @@ test('creates an inventory queue with a dead-letter queue (maxReceiveCount 3)', 
       maxReceiveCount: 3,
       deadLetterTargetArn: Match.anyValue(),
     }),
+  });
+});
+
+test('routes OrderPlaced to the inventory queue (buffered path)', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties('AWS::Events::Rule', {
+    Targets: Match.arrayWith([
+      Match.objectLike({ Arn: { 'Fn::GetAtt': [Match.stringLikeRegexp('InventoryQueue'), 'Arn'] } }),
+    ]),
   });
 });

@@ -49,6 +49,15 @@ export class OrderFlowStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'InventoryQueueUrl', { value: inventoryQueue.queueUrl });
     new cdk.CfnOutput(this, 'InventoryDlqUrl', { value: inventoryDlq.queueUrl });
 
+    // --- Route OrderPlaced to the inventory queue (T19) ------------------
+    // Buffered path: unlike email/analytics (direct Lambda targets), inventory
+    // goes through SQS so failures are retried and captured by the DLQ.
+    new events.Rule(this, 'InventoryOnOrderPlaced', {
+      eventBus: bus,
+      eventPattern: { source: ['orders.api'], detailType: ['OrderPlaced'] },
+      targets: [new targets.SqsQueue(inventoryQueue)],
+    });
+
 
     // --- Producer Lambda + API (T8) --------------------------------------
     const createOrderFn = new NodejsFunction(this, 'CreateOrderFn', {
