@@ -5,6 +5,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
@@ -19,6 +20,18 @@ export class OrderFlowStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'OrderFlowBusName', { value: bus.eventBusName });
     new cdk.CfnOutput(this, 'OrderFlowBusArn', { value: bus.eventBusArn });
+
+    // --- Single-table store (T12) ----------------------------------------
+    // Order status:   PK = ORDER#<orderId>   SK = STATUS#<consumer>
+    // Inventory (E4): PK = PRODUCT#<sku>      SK = STOCK
+    const table = new dynamodb.Table(this, 'OrderFlowTable', {
+      partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // learning project: clean teardown
+    });
+    new cdk.CfnOutput(this, 'TableName', { value: table.tableName });
+
 
     // --- Producer Lambda + API (T8) --------------------------------------
     const createOrderFn = new NodejsFunction(this, 'CreateOrderFn', {
