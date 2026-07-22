@@ -3,6 +3,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda
 import { randomUUID } from 'node:crypto';
 
 const eventBridge = new EventBridgeClient({});
+const BUS_NAME = process.env.EVENT_BUS_NAME ?? '';
 
 interface OrderItem {
   sku: string;
@@ -48,16 +49,11 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     forceFailure: result.forceFailure, // used in E4 to force a DLQ failure on demand
   };
 
-  // Read the bus name at call time (not module load) so it's set from the
-  // live environment and stays testable.
-  const busName = process.env.EVENT_BUS_NAME ?? '';
-
-  // Hand the event to EventBridge. We don't know who consumes it, that's the point.
-  await eventBridge.send(
+  const putResult = await eventBridge.send(
     new PutEventsCommand({
       Entries: [
         {
-          EventBusName: busName,
+          EventBusName: BUS_NAME,
           Source: 'orders.api',
           DetailType: 'OrderPlaced',
           Detail: JSON.stringify(detail),
@@ -66,8 +62,16 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     }),
   );
 
+  // PutEvents returns HTTP 200 even on PARTIAL failure. If the entry didn't
+  // actually land, don't tell the client "accepted".
+  if (putResult.FailedEntryCount && putResult.FailedEntryCount > 0) {
+    console.error('PutEvents partial failure', putResult.Entries);
+    return json(502, { error: 'failed to publish order event' });
+  }
+
   // 202 Accepted: order taken; consumers process asynchronously.
   return json(202, { orderId });
+
 };
 
 function json(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
