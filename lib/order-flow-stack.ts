@@ -64,5 +64,36 @@ export class OrderFlowStack extends cdk.Stack {
       eventPattern: { source: ['orders.api'] },
       targets: [new targets.CloudWatchLogGroup(auditLog)],
     });
+
+    // --- Fan-out consumers (T15) -----------------------------------------
+    const emailFn = new NodejsFunction(this, 'NotifyEmailFn', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../lambda/notify-email/index.ts'),
+      handler: 'handler',
+      environment: { TABLE_NAME: table.tableName },
+    });
+    table.grantWriteData(emailFn);
+
+    const analyticsFn = new NodejsFunction(this, 'RecordAnalyticsFn', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../lambda/record-analytics/index.ts'),
+      handler: 'handler',
+      environment: { TABLE_NAME: table.tableName },
+    });
+    table.grantWriteData(analyticsFn);
+
+    // One rule per consumer: each subscribes to OrderPlaced independently.
+    new events.Rule(this, 'EmailOnOrderPlaced', {
+      eventBus: bus,
+      eventPattern: { source: ['orders.api'], detailType: ['OrderPlaced'] },
+      targets: [new targets.LambdaFunction(emailFn)],
+    });
+
+    new events.Rule(this, 'AnalyticsOnOrderPlaced', {
+      eventBus: bus,
+      eventPattern: { source: ['orders.api'], detailType: ['OrderPlaced'] },
+      targets: [new targets.LambdaFunction(analyticsFn)],
+    });
+
   }
 }

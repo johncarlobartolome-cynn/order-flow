@@ -66,17 +66,52 @@ test('audits all order events to a CloudWatch log group', () => {
 });
 
 test('creates the single-table DynamoDB store', () => {
-  const app = new cdk.App();
-  const stack = new OrderFlowStack(app, 'TestStack');
-  const template = Template.fromStack(stack);
+    const app = new cdk.App();
+    const stack = new OrderFlowStack(app, 'TestStack');
+    const template = Template.fromStack(stack);
 
-  template.resourceCountIs('AWS::DynamoDB::Table', 1);
-  template.hasResourceProperties('AWS::DynamoDB::Table', {
-    BillingMode: 'PAY_PER_REQUEST',
-    KeySchema: [
-      { AttributeName: 'PK', KeyType: 'HASH' },
-      { AttributeName: 'SK', KeyType: 'RANGE' },
-    ],
-  });
+    template.resourceCountIs('AWS::DynamoDB::Table', 1);
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+        BillingMode: 'PAY_PER_REQUEST',
+        KeySchema: [
+            { AttributeName: 'PK', KeyType: 'HASH' },
+            { AttributeName: 'SK', KeyType: 'RANGE' },
+        ],
+    });
 });
+
+test('fans out OrderPlaced to two independent consumers with table write access', () => {
+    const app = new cdk.App();
+    const stack = new OrderFlowStack(app, 'TestStack');
+    const template = Template.fromStack(stack);
+
+    // The two consumer Lambdas, identified by their TABLE_NAME env.
+    // (Not a total count: the CloudWatchLogGroup audit target adds a hidden helper Lambda.)
+    const consumerFns = template.findResources('AWS::Lambda::Function', {
+        Properties: { Environment: { Variables: Match.objectLike({ TABLE_NAME: Match.anyValue() }) } },
+    });
+    expect(Object.keys(consumerFns)).toHaveLength(2);
+
+    // 3 rules total: audit (source only) + the two OrderPlaced consumer rules
+    template.resourceCountIs('AWS::Events::Rule', 3);
+
+    // exactly two rules match OrderPlaced
+    const orderPlacedRules = template.findResources('AWS::Events::Rule', {
+        Properties: { EventPattern: Match.objectLike({ 'detail-type': ['OrderPlaced'] }) },
+    });
+    expect(Object.keys(orderPlacedRules)).toHaveLength(2);
+
+    // consumers can write to the table (grantWriteData → includes dynamodb:PutItem)
+    template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: Match.objectLike({
+            Statement: Match.arrayWith([
+                Match.objectLike({
+                    Action: Match.arrayWith(['dynamodb:PutItem']),
+                    Effect: 'Allow',
+                }),
+            ]),
+        }),
+    });
+});
+
 
