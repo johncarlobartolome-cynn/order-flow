@@ -7,6 +7,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
@@ -57,6 +58,19 @@ export class OrderFlowStack extends cdk.Stack {
       eventPattern: { source: ['orders.api'], detailType: ['OrderPlaced'] },
       targets: [new targets.SqsQueue(inventoryQueue)],
     });
+
+    // --- Inventory worker (T21 wires the T20 handler) --------------------
+    const inventoryFn = new NodejsFunction(this, 'ProcessInventoryFn', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../lambda/process-inventory/index.ts'),
+      handler: 'handler',
+      environment: { TABLE_NAME: table.tableName },
+    });
+    table.grantWriteData(inventoryFn);
+
+    // SQS triggers the worker. batchSize 1 = one order per invocation, so a poison
+    // message fails alone and reaches the DLQ without dragging a whole batch down.
+    inventoryFn.addEventSource(new SqsEventSource(inventoryQueue, { batchSize: 1 }));
 
 
     // --- Producer Lambda + API (T8) --------------------------------------

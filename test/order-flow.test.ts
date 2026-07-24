@@ -139,3 +139,24 @@ test('routes OrderPlaced to the inventory queue (buffered path)', () => {
     ]),
   });
 });
+
+test('the inventory worker consumes the queue (batchSize 1) and can write the table', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
+
+  // SQS -> worker event-source mapping, one message per invocation
+  template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+    BatchSize: 1,
+    EventSourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('InventoryQueue'), 'Arn'] },
+  });
+
+  // worker granted receive on the queue (via addEventSource)
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({ Action: Match.arrayWith(['sqs:ReceiveMessage']) }),
+      ]),
+    }),
+  });
+});
