@@ -54,7 +54,11 @@ test('throws on a forceFailure order (poison → DLQ) and writes nothing', async
 });
 
 test('skips a malformed message without writing', async () => {
+  // The guard logs on purpose. Silence it so output stays clean, and assert it fired.
+  const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
   await handler(sqsEvent({ customerEmail: 'x@y.com' }));
   expect(ddbMock.commandCalls(UpdateCommand)).toHaveLength(0);
   expect(ddbMock.commandCalls(PutCommand)).toHaveLength(0);
+  expect(errSpy).toHaveBeenCalledTimes(1);
+  errSpy.mockRestore();
 });

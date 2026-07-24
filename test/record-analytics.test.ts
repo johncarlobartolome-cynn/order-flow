@@ -29,9 +29,13 @@ test('records analytics totals for the order', async () => {
 });
 
 test('skips a malformed event without writing', async () => {
+  // The guard logs on purpose. Silence it so output stays clean, and assert it fired.
+  const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
   ddbMock.on(PutCommand).resolves({});
   await handler(orderEvent({ customerEmail: 'x@y.com' }));
   expect(ddbMock.commandCalls(PutCommand)).toHaveLength(0);
+  expect(errSpy).toHaveBeenCalledTimes(1);
+  errSpy.mockRestore();
 });
 
 test('counts a single-item order correctly', async () => {
