@@ -1,6 +1,6 @@
 import type { SQSEvent, SQSRecord } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, UpdateCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const TABLE_NAME = process.env.TABLE_NAME ?? '';
@@ -32,35 +32,55 @@ async function processRecord(record: SQSRecord): Promise<void> {
     return;
   }
 
-  // Poison-message demo: a forceFailure order throws. After maxReceiveCount
-  // retries, SQS moves it to the DLQ instead of losing it.
+  // Poison-message demo: forceFailure throws before any write → retries → DLQ.
   if (order.forceFailure) {
     throw new Error(`Forced failure for order ${order.orderId}`);
   }
 
-  // Atomic stock decrement per item (ADD a negative delta).
-  for (const item of order.items) {
+  // Idempotent + atomic. One transaction:
+  //   (1) record STATUS#inventory, but ONLY if it doesn't already exist, and
+  //   (2) decrement stock per item.
+  // A duplicate delivery fails the condition → the whole transaction aborts →
+  // nothing is re-applied. Partial writes are impossible (all-or-nothing).
+  const decrements = order.items.map((item) => ({
+    Update: {
+      TableName: TABLE_NAME,
+      Key: { PK: `PRODUCT#${item.sku}`, SK: 'STOCK' },
+      UpdateExpression: 'ADD stock :neg',
+      ExpressionAttributeValues: { ':neg': -item.qty },
+    },
+  }));
+
+  try {
     await ddb.send(
-      new UpdateCommand({
-        TableName: TABLE_NAME,
-        Key: { PK: `PRODUCT#${item.sku}`, SK: 'STOCK' },
-        UpdateExpression: 'ADD stock :neg',
-        ExpressionAttributeValues: { ':neg': -item.qty },
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: TABLE_NAME,
+              Item: {
+                PK: `ORDER#${order.orderId}`,
+                SK: 'STATUS#inventory',
+                status: 'reserved',
+                skus: order.items.map((i) => i.sku),
+                updatedAt: new Date().toISOString(),
+              },
+              ConditionExpression: 'attribute_not_exists(PK)',
+            },
+          },
+          ...decrements,
+        ],
       }),
     );
+  } catch (err: any) {
+    // Condition failed on the status Put = already processed → idempotent no-op.
+    if (
+      err?.name === 'TransactionCanceledException' &&
+      err?.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
+      console.log(`Order ${order.orderId} already processed, skipping`);
+      return;
+    }
+    throw err; // real failure → retry → eventually DLQ
   }
-
-  // Record that inventory processed this order.
-  await ddb.send(
-    new PutCommand({
-      TableName: TABLE_NAME,
-      Item: {
-        PK: `ORDER#${order.orderId}`,
-        SK: 'STATUS#inventory',
-        status: 'reserved',
-        skus: order.items.map((i) => i.sku),
-        updatedAt: new Date().toISOString(),
-      },
-    }),
-  );
 }
