@@ -160,3 +160,26 @@ test('the inventory worker consumes the queue (batchSize 1) and can write the ta
     }),
   });
 });
+
+test('creates a repo-scoped GitHub OIDC deploy role (main branch only)', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties('AWS::IAM::Role', {
+    RoleName: 'order-flow-github-deploy',
+    AssumeRolePolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: 'sts:AssumeRoleWithWebIdentity',
+          Condition: Match.objectLike({
+            StringLike: {
+              'token.actions.githubusercontent.com:sub':
+                'repo:johncarlobartolome-cynn/order-flow:ref:refs/heads/main',
+            },
+          }),
+        }),
+      ]),
+    }),
+  });
+});

@@ -7,6 +7,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
@@ -134,6 +135,54 @@ export class OrderFlowStack extends cdk.Stack {
       eventPattern: { source: ['orders.api'], detailType: ['OrderPlaced'] },
       targets: [new targets.LambdaFunction(analyticsFn)],
     });
+
+    // --- CI/CD: keyless GitHub Actions deploy role (T25) -----------------
+    // Reference the account's EXISTING GitHub OIDC provider (one per account).
+    const githubOidc = iam.OpenIdConnectProvider.fromOpenIdConnectProviderArn(
+      this,
+      'GitHubOidcProvider',
+      `arn:aws:iam::${this.account}:oidc-provider/token.actions.githubusercontent.com`,
+    );
+    // ^^ If step 0 showed NO provider, replace the three lines above with:
+    //    const githubOidc = new iam.OpenIdConnectProvider(this, 'GitHubOidcProvider', {
+    //      url: 'https://token.actions.githubusercontent.com',
+    //      clientIds: ['sts.amazonaws.com'],
+    //    });
+
+    // Role GitHub Actions assumes: ONLY from this repo's main branch. No stored keys.
+    const deployRole = new iam.Role(this, 'GitHubDeployRole', {
+      roleName: 'order-flow-github-deploy',
+      description: 'GitHub Actions OIDC role: cdk deploy + E2E reads for order-flow',
+      assumedBy: new iam.OpenIdConnectPrincipal(githubOidc, {
+        StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
+        StringLike: {
+          'token.actions.githubusercontent.com:sub':
+            'repo:johncarlobartolome-cynn/order-flow:ref:refs/heads/main',
+        },
+      }),
+    });
+
+    // cdk deploy works by assuming the CDK bootstrap roles.
+    deployRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['sts:AssumeRole'],
+      resources: [`arn:aws:iam::${this.account}:role/cdk-hnb659fds-*`],
+    }));
+
+    // Least-privilege reads the post-deploy E2E test needs.
+    deployRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['cloudformation:DescribeStacks'],
+      resources: [`arn:aws:cloudformation:${this.region}:${this.account}:stack/${this.stackName}/*`],
+    }));
+    deployRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:GetItem', 'dynamodb:Query'],
+      resources: [table.tableArn],
+    }));
+    deployRole.addToPolicy(new iam.PolicyStatement({
+      actions: ['sqs:GetQueueAttributes'],
+      resources: [inventoryDlq.queueArn],
+    }));
+
+    new cdk.CfnOutput(this, 'GitHubDeployRoleArn', { value: deployRole.roleArn });
 
   }
 }
