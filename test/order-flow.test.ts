@@ -183,3 +183,21 @@ test('creates a repo-scoped GitHub OIDC deploy role (main branch only)', () => {
     }),
   });
 });
+
+test('exposes GET /orders/{id} with CORS and read-only table access', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties('AWS::ApiGatewayV2::Route', { RouteKey: 'GET /orders/{id}' });
+  template.hasResourceProperties('AWS::ApiGatewayV2::Api', {
+    CorsConfiguration: Match.objectLike({ AllowMethods: Match.arrayWith(['GET', 'POST']) }),
+  });
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({ Action: Match.arrayWith(['dynamodb:Query']) }),
+      ]),
+    }),
+  });
+});

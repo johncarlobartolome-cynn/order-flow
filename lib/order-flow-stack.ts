@@ -10,7 +10,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
-import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
+import { HttpApi, HttpMethod, CorsHttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 
 export class OrderFlowStack extends cdk.Stack {
@@ -85,12 +85,33 @@ export class OrderFlowStack extends cdk.Stack {
     // Least privilege: only events:PutEvents, only to our bus.
     bus.grantPutEventsTo(createOrderFn);
 
-    const httpApi = new HttpApi(this, 'OrderFlowApi');
+    const httpApi = new HttpApi(this, 'OrderFlowApi', {
+      corsPreflight: {
+        allowOrigins: ['*'], // public demo, public data; scope later if needed
+        allowMethods: [CorsHttpMethod.GET, CorsHttpMethod.POST],
+        allowHeaders: ['content-type'],
+      },
+    });
     httpApi.addRoutes({
       path: '/orders',
       methods: [HttpMethod.POST],
       integration: new HttpLambdaIntegration('CreateOrderIntegration', createOrderFn),
     });
+
+    const getStatusFn = new NodejsFunction(this, 'GetOrderStatusFn', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../lambda/get-order-status/index.ts'),
+      handler: 'handler',
+      environment: { TABLE_NAME: table.tableName },
+    });
+    table.grantReadData(getStatusFn);
+
+    httpApi.addRoutes({
+      path: '/orders/{id}',
+      methods: [HttpMethod.GET],
+      integration: new HttpLambdaIntegration('GetOrderStatusIntegration', getStatusFn),
+    });
+
     new cdk.CfnOutput(this, 'ApiUrl', { value: httpApi.apiEndpoint });
 
     // --- Audit rule: see events on the bus (T9) --------------------------
