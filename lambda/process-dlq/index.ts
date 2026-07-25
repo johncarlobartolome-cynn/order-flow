@@ -14,10 +14,16 @@ export const handler = async (event: SQSEvent): Promise<void> => {
 };
 
 async function recordDeadLetter(record: SQSRecord): Promise<void> {
-  const order = JSON.parse(record.body)?.detail;
+  let order: { orderId?: string } | undefined;
+  try {
+    order = JSON.parse(record.body)?.detail;
+  } catch {
+    console.error('DLQ message body is not JSON, skipping', { messageId: record.messageId });
+    return; // no redrive on the DLQ; a bad body would otherwise redeliver until 14-day retention
+  }
   if (!order?.orderId) {
     console.error('DLQ message with no orderId', { messageId: record.messageId });
-    return; // nothing to signal against
+    return;
   }
 
   // Terminal state, so a plain Put is naturally idempotent: a redelivery just

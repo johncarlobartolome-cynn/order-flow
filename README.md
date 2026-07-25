@@ -126,6 +126,17 @@ web/            React + Vite SPA (the demo surface)
 .github/        the OIDC deploy pipeline
 ```
 
+## Known limitations (deliberate scope)
+
+Conscious trade-offs for a focused demo, not oversights:
+
+- **No API authorizer.** The endpoints are open; auth was scoped out. The event payload (including `customerEmail`) lands in the short-retention audit log by design.
+- **Email consumer is mocked.** It records that it reacted rather than sending real mail; wiring SES is a small, deliberate next step.
+- **Only the inventory path has a DLQ.** Email and analytics are direct EventBridge targets, where EventBridge's own retry applies; the inventory path is where the buffered-worker plus DLQ pattern is demonstrated.
+- **No oversell guard.** Stock can go negative under contrived input; a conditional-write floor is straightforward to add but out of scope here.
+- **Single-deploy naming.** A few resources use fixed names for readability, so two copies of the stack can't run side by side in one account.
+- **Demo-scale orders.** Orders are small: the DynamoDB transaction has a 100-item ceiling and per-order SKUs are assumed distinct.
+
 ## Run it yourself
 
 Prerequisites: Node.js, the AWS CDK, and AWS credentials for an account bootstrapped for CDK (`cdk bootstrap`).

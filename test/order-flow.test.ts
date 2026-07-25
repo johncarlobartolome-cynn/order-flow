@@ -173,10 +173,10 @@ test('creates a repo-scoped GitHub OIDC deploy role (main branch only)', () => {
         Match.objectLike({
           Action: 'sts:AssumeRoleWithWebIdentity',
           Condition: Match.objectLike({
-            StringLike: {
+            StringEquals: Match.objectLike({
               'token.actions.githubusercontent.com:sub':
                 'repo:johncarlobartolome-cynn@211265861/order-flow@1311318161:ref:refs/heads/main',
-            },
+            }),
           }),
         }),
       ]),
@@ -213,7 +213,14 @@ test('serves the web demo from a private S3 bucket via CloudFront (OAC)', () => 
   template.resourceCountIs('AWS::CloudFront::Distribution', 1);
   template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
   template.hasResourceProperties('AWS::CloudFront::Distribution', {
-    DistributionConfig: Match.objectLike({ DefaultRootObject: 'index.html' }),
+    DistributionConfig: Match.objectLike({
+      DefaultRootObject: 'index.html',
+      DefaultCacheBehavior: Match.objectLike({ ViewerProtocolPolicy: 'redirect-to-https' }),
+      CustomErrorResponses: Match.arrayWith([
+        Match.objectLike({ ErrorCode: 403, ResponseCode: 200, ResponsePagePath: '/index.html' }),
+        Match.objectLike({ ErrorCode: 404, ResponseCode: 200, ResponsePagePath: '/index.html' }),
+      ]),
+    }),
   });
 });
 
@@ -232,5 +239,12 @@ test('a DLQ consumer Lambda is wired to the inventory DLQ', () => {
 
   template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
     EventSourceArn: { 'Fn::GetAtt': [dlqId, 'Arn'] },
+  });
+});
+
+test('SQS queues are encrypted at rest', () => {
+  const template = Template.fromStack(new OrderFlowStack(new cdk.App(), 'TestStack'));
+  Object.values(template.findResources('AWS::SQS::Queue')).forEach((q: any) => {
+    expect(q.Properties.SqsManagedSseEnabled).toBe(true);
   });
 });

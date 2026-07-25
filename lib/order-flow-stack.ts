@@ -22,6 +22,13 @@ export class OrderFlowStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    // Short-lived, auto-deleted log group per function, so `cdk destroy` leaves nothing behind.
+    const shortLog = (id: string) =>
+      new logs.LogGroup(this, id, {
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      });
+
     // --- Custom event bus (T6) -------------------------------------------
     const bus = new events.EventBus(this, 'OrderFlowBus', {
       eventBusName: 'order-flow-bus',
@@ -45,6 +52,7 @@ export class OrderFlowStack extends cdk.Stack {
     // of vanishing. This is the "nothing disappears" safety net.
     const inventoryDlq = new sqs.Queue(this, 'InventoryDlq', {
       retentionPeriod: cdk.Duration.days(14),
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
     });
 
     // Main work queue: buffers OrderPlaced events for the inventory worker.
@@ -56,6 +64,7 @@ export class OrderFlowStack extends cdk.Stack {
       // so a tight visibility is safe AND gives a snappy demo: ~3 receives x 10s =>
       // real DLQ landing in ~20-30s. A latency-variable prod worker would keep 6x.
       visibilityTimeout: cdk.Duration.seconds(10),
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
       deadLetterQueue: { queue: inventoryDlq, maxReceiveCount: 3 },
     });
     new cdk.CfnOutput(this, 'InventoryQueueUrl', { value: inventoryQueue.queueUrl });
@@ -75,6 +84,7 @@ export class OrderFlowStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '../lambda/process-inventory/index.ts'),
       handler: 'handler',
+      logGroup: shortLog('ProcessInventoryFnLogs'),
       timeout: cdk.Duration.seconds(3),
       environment: { TABLE_NAME: table.tableName },
     });
@@ -94,6 +104,7 @@ export class OrderFlowStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '../lambda/process-dlq/index.ts'),
       handler: 'handler',
+      logGroup: shortLog('ProcessDlqFnLogs'),
       timeout: cdk.Duration.seconds(10),
       environment: { TABLE_NAME: table.tableName },
     });
@@ -106,6 +117,7 @@ export class OrderFlowStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '../lambda/create-order/index.ts'),
       handler: 'handler',
+      logGroup: shortLog('CreateOrderFnLogs'),
       environment: { EVENT_BUS_NAME: bus.eventBusName },
     });
 
@@ -129,6 +141,7 @@ export class OrderFlowStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '../lambda/get-order-status/index.ts'),
       handler: 'handler',
+      logGroup: shortLog('GetOrderStatusFnLogs'),
       environment: { TABLE_NAME: table.tableName },
     });
     table.grantReadData(getStatusFn);
@@ -159,6 +172,7 @@ export class OrderFlowStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '../lambda/notify-email/index.ts'),
       handler: 'handler',
+      logGroup: shortLog('NotifyEmailFnLogs'),
       environment: { TABLE_NAME: table.tableName },
     });
     table.grantWriteData(emailFn);
@@ -167,6 +181,7 @@ export class OrderFlowStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '../lambda/record-analytics/index.ts'),
       handler: 'handler',
+      logGroup: shortLog('RecordAnalyticsFnLogs'),
       environment: { TABLE_NAME: table.tableName },
     });
     table.grantWriteData(analyticsFn);
@@ -202,11 +217,10 @@ export class OrderFlowStack extends cdk.Stack {
       roleName: 'order-flow-github-deploy',
       description: 'GitHub Actions OIDC role: cdk deploy + E2E reads for order-flow',
       assumedBy: new iam.OpenIdConnectPrincipal(githubOidc, {
-        StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
-        StringLike: {
+        StringEquals: {
+          'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
           // GitHub injects immutable IDs into the sub: owner@<ownerId>/repo@<repoId>.
-          // Verified from the rejected token via CloudTrail. Plain repo:owner/repo
-          // does NOT match. These numeric IDs are rename-proof, so pinning them is safe.
+          // Exact match, main branch only. Numeric IDs are rename-proof, so pinning is safe.
           'token.actions.githubusercontent.com:sub':
             'repo:johncarlobartolome-cynn@211265861/order-flow@1311318161:ref:refs/heads/main',
         },
@@ -227,10 +241,6 @@ export class OrderFlowStack extends cdk.Stack {
     deployRole.addToPolicy(new iam.PolicyStatement({
       actions: ['dynamodb:GetItem', 'dynamodb:Query'],
       resources: [table.tableArn],
-    }));
-    deployRole.addToPolicy(new iam.PolicyStatement({
-      actions: ['sqs:GetQueueAttributes'],
-      resources: [inventoryDlq.queueArn],
     }));
 
     new cdk.CfnOutput(this, 'GitHubDeployRoleArn', { value: deployRole.roleArn });
