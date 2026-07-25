@@ -201,3 +201,18 @@ test('exposes GET /orders/{id} with CORS and read-only table access', () => {
     }),
   });
 });
+
+test('serves the web demo from a private S3 bucket via CloudFront (OAC)', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties('AWS::S3::Bucket', {
+    PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, RestrictPublicBuckets: true },
+  });
+  template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+  template.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
+  template.hasResourceProperties('AWS::CloudFront::Distribution', {
+    DistributionConfig: Match.objectLike({ DefaultRootObject: 'index.html' }),
+  });
+});

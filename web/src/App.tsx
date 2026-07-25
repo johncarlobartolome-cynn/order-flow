@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
+import { useEffect, useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { placeOrder, getStatus } from './api';
 import { CONSUMERS, deriveStates, type Consumer, type ConsumerState } from './status';
 
@@ -31,23 +31,27 @@ export default function App() {
   const [forceFailure, setForceFailure] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, unknown>>({});
   const [placing, setPlacing] = useState(false);
-  const startRef = useRef(0);
+  const [startTime, setStartTime] = useState(0);
+  const [now, setNow] = useState(0);
 
   async function submit() {
     setPlacing(true); setStatuses({});
     try {
       const { orderId } = await placeOrder([{ sku: 'SKU-1', qty: 2 }], 'buyer@example.com', forceFailure);
-      startRef.current = Date.now(); setOrderId(orderId);
+      const started = Date.now(); setStartTime(started); setNow(started); setOrderId(orderId);
     } finally { setPlacing(false); }
   }
 
   useEffect(() => {
     if (!orderId) return;
-    const t = setInterval(async () => setStatuses((await getStatus(orderId)).statuses), 2000);
+    const t = setInterval(async () => {
+      setStatuses((await getStatus(orderId)).statuses);
+      setNow(Date.now());
+    }, 2000);
     return () => clearInterval(t);
   }, [orderId]);
 
-  const elapsed = orderId ? Date.now() - startRef.current : 0;
+  const elapsed = orderId ? now - startTime : 0;
   const states = deriveStates(statuses, forceFailure, elapsed);
   const done = CONSUMERS.filter((c) => states[c] === 'done').length;
   const dlq = states.inventory === 'dlq';
