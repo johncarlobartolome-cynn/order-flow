@@ -175,7 +175,7 @@ test('creates a repo-scoped GitHub OIDC deploy role (main branch only)', () => {
           Condition: Match.objectLike({
             StringLike: {
               'token.actions.githubusercontent.com:sub':
-                'repo:johncarlobartolome-cynn/order-flow:ref:refs/heads/main',
+                'repo:johncarlobartolome-cynn@211265861/order-flow@1311318161:ref:refs/heads/main',
             },
           }),
         }),

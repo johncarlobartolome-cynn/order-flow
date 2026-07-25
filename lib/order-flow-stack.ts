@@ -156,8 +156,11 @@ export class OrderFlowStack extends cdk.Stack {
       assumedBy: new iam.OpenIdConnectPrincipal(githubOidc, {
         StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
         StringLike: {
+          // GitHub injects immutable IDs into the sub: owner@<ownerId>/repo@<repoId>.
+          // Verified from the rejected token via CloudTrail. Plain repo:owner/repo
+          // does NOT match. These numeric IDs are rename-proof, so pinning them is safe.
           'token.actions.githubusercontent.com:sub':
-            'repo:johncarlobartolome-cynn/order-flow:ref:refs/heads/main',
+            'repo:johncarlobartolome-cynn@211265861/order-flow@1311318161:ref:refs/heads/main',
         },
       }),
     });
