@@ -24,9 +24,15 @@ jobs:
       - name: Test (unit + CDK assertions)
         run: npm test
 
-      - name: Build web client
+      - name: Require VITE_API_URL
+        run: test -n "${{ vars.VITE_API_URL }}" || { echo "VITE_API_URL repo variable is not set"; exit 1; }
+
+      - name: Build and test web client
         working-directory: web
-        run: npm ci && npm run build
+        run: |
+          npm ci
+          npm run test
+          npm run build
         env:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
 

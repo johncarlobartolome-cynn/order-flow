@@ -50,7 +50,12 @@ export class OrderFlowStack extends cdk.Stack {
     // Main work queue: buffers OrderPlaced events for the inventory worker.
     // After 3 failed receives, a message is redriven to the DLQ.
     const inventoryQueue = new sqs.Queue(this, 'InventoryQueue', {
-      visibilityTimeout: cdk.Duration.seconds(30),
+      // Production guidance is visibility >= 6x the fn timeout so a slow invocation
+      // isn't retried mid-flight. Here the worker is fast (a single transaction) and
+      // the forceFailure path throws in <100ms, and T23.1 made processing idempotent,
+      // so a tight visibility is safe AND gives a snappy demo: ~3 receives x 10s =>
+      // real DLQ landing in ~20-30s. A latency-variable prod worker would keep 6x.
+      visibilityTimeout: cdk.Duration.seconds(10),
       deadLetterQueue: { queue: inventoryDlq, maxReceiveCount: 3 },
     });
     new cdk.CfnOutput(this, 'InventoryQueueUrl', { value: inventoryQueue.queueUrl });
@@ -70,6 +75,7 @@ export class OrderFlowStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_22_X,
       entry: path.join(__dirname, '../lambda/process-inventory/index.ts'),
       handler: 'handler',
+      timeout: cdk.Duration.seconds(3),
       environment: { TABLE_NAME: table.tableName },
     });
     table.grantWriteData(inventoryFn);
@@ -77,6 +83,22 @@ export class OrderFlowStack extends cdk.Stack {
     // SQS triggers the worker. batchSize 1 = one order per invocation, so a poison
     // message fails alone and reaches the DLQ without dragging a whole batch down.
     inventoryFn.addEventSource(new SqsEventSource(inventoryQueue, { batchSize: 1 }));
+
+    // --- DLQ consumer: turn a dead-letter into a real status signal (T36) --
+    // The DLQ isn't a graveyard, it has its own consumer. When a poison message
+    // lands here, this writes STATUS#inventory {status:'dead-letter'} so the UI
+    // reflects ACTUAL state, not a client-side timer guess. It also drains the DLQ
+    // (so the E2E asserts the status row, not queue depth). The DLQ keeps its
+    // default 30s visibility, comfortably above this fn's 10s timeout.
+    const processDlqFn = new NodejsFunction(this, 'ProcessDlqFn', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      entry: path.join(__dirname, '../lambda/process-dlq/index.ts'),
+      handler: 'handler',
+      timeout: cdk.Duration.seconds(10),
+      environment: { TABLE_NAME: table.tableName },
+    });
+    table.grantWriteData(processDlqFn);
+    processDlqFn.addEventSource(new SqsEventSource(inventoryDlq, { batchSize: 1 }));
 
 
     // --- Producer Lambda + API (T8) --------------------------------------

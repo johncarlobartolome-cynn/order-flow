@@ -216,3 +216,21 @@ test('serves the web demo from a private S3 bucket via CloudFront (OAC)', () => 
     DistributionConfig: Match.objectLike({ DefaultRootObject: 'index.html' }),
   });
 });
+
+test('a DLQ consumer Lambda is wired to the inventory DLQ', () => {
+  const app = new cdk.App();
+  const stack = new OrderFlowStack(app, 'TestStack');
+  const template = Template.fromStack(stack);
+
+  // The DLQ is the queue with 14-day (1209600s) retention.
+  const dlqId = Object.keys(
+    template.findResources('AWS::SQS::Queue', {
+      Properties: { MessageRetentionPeriod: 1209600 },
+    }),
+  )[0];
+  expect(dlqId).toBeDefined();
+
+  template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+    EventSourceArn: { 'Fn::GetAtt': [dlqId, 'Arn'] },
+  });
+});

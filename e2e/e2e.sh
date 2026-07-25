@@ -9,8 +9,7 @@ outputs=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$RE
   --query "Stacks[0].Outputs" --output json)
 api=$(echo "$outputs" | jq -r '.[]|select(.OutputKey=="ApiUrl")|.OutputValue')
 table=$(echo "$outputs" | jq -r '.[]|select(.OutputKey=="TableName")|.OutputValue')
-dlq=$(echo "$outputs" | jq -r '.[]|select(.OutputKey=="InventoryDlqUrl")|.OutputValue')
-echo "api=$api"; echo "table=$table"; echo "dlq=$dlq"
+echo "api=$api"; echo "table=$table"
 
 # --- Happy path: one order fans out to all 3 consumers ---
 echo "== Placing a normal order =="
@@ -32,27 +31,21 @@ done
 [ "$count" -ge 3 ] || { echo "FAIL: fan-out incomplete ($count/3)"; exit 1; }
 echo "PASS: fan-out reached all 3 consumers"
 
-# --- Poison path: forceFailure raises DLQ depth above baseline ---
-echo "== Poison path (DLQ) =="
-base=$(aws sqs get-queue-attributes --queue-url "$dlq" --region "$REGION" \
-  --attribute-names ApproximateNumberOfMessages \
-  --query "Attributes.ApproximateNumberOfMessages" --output text)
-echo "DLQ baseline depth=$base"
+# --- Poison path: forceFailure lands in DLQ, consumer writes dead-letter ---
+echo "== Poison path (DLQ signal) =="
+fail_id=$(curl -sS -X POST "$api/orders" -H 'content-type: application/json' \
+  -d '{"items":[{"sku":"SKU-1","qty":1}],"customerEmail":"e2e@example.com","forceFailure":true}' \
+  | jq -r '.orderId')
+echo "forceFailure orderId=$fail_id; waiting for redrive + DLQ consumer (~up to 90s)"
 
-curl -sS -X POST "$api/orders" -H 'content-type: application/json' \
-  -d '{"items":[{"sku":"SKU-1","qty":1}],"customerEmail":"e2e@example.com","forceFailure":true}' >/dev/null
-echo "placed forceFailure order; waiting for redrive (~up to 2.5 min)"
-
-depth="$base"
+inv_status=""
 for i in $(seq 1 30); do
-  depth=$(aws sqs get-queue-attributes --queue-url "$dlq" --region "$REGION" \
-    --attribute-names ApproximateNumberOfMessages \
-    --query "Attributes.ApproximateNumberOfMessages" --output text)
-  echo "  dlq attempt $i: depth=$depth (baseline $base)"
-  [ "$depth" -gt "$base" ] && break
+  inv_status=$(curl -sS "$api/orders/$fail_id" | jq -r '.statuses.inventory.status // "none"')
+  echo "  dlq attempt $i: inventory status=$inv_status"
+  [ "$inv_status" = "dead-letter" ] && break
   sleep 5
 done
-[ "$depth" -gt "$base" ] || { echo "FAIL: poison message did not reach the DLQ"; exit 1; }
-echo "PASS: poison message captured in DLQ"
+[ "$inv_status" = "dead-letter" ] || { echo "FAIL: no dead-letter signal for poison order"; exit 1; }
+echo "PASS: poison order recorded as dead-letter via the DLQ consumer"
 
 echo "== E2E PASSED =="

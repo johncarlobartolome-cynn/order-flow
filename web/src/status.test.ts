@@ -2,19 +2,30 @@ import { describe, it, expect } from 'vitest';
 import { deriveStates } from './status';
 
 describe('deriveStates', () => {
-  it('marks consumers done when their status exists', () => {
-    expect(deriveStates({ email: {}, analytics: {}, inventory: {} }, false, 5000))
-      .toEqual({ email: 'done', analytics: 'done', inventory: 'done' });
+  it('all pending before any status rows arrive', () => {
+    expect(deriveStates({})).toEqual({ email: 'pending', analytics: 'pending', inventory: 'pending' });
   });
-  it('keeps missing consumers pending early', () => {
-    const s = deriveStates({ email: {} }, false, 3000);
-    expect(s.analytics).toBe('pending');
-    expect(s.inventory).toBe('pending');
+
+  it('a present row resolves to done', () => {
+    expect(deriveStates({ email: { status: 'sent' } }).email).toBe('done');
   });
-  it('infers inventory → DLQ on a forceFailure order after the grace window', () => {
-    expect(deriveStates({ email: {}, analytics: {} }, true, 25000).inventory).toBe('dlq');
+
+  it('inventory is dlq when the dead-letter row is present', () => {
+    const s = deriveStates({ email: { status: 'sent' }, analytics: { status: 'recorded' }, inventory: { status: 'dead-letter' } });
+    expect(s.inventory).toBe('dlq');
   });
-  it('does not mark DLQ before the grace window', () => {
-    expect(deriveStates({ email: {}, analytics: {} }, true, 5000).inventory).toBe('pending');
+
+  it('inventory shows processing (never a false dlq) while still on the queue', () => {
+    // the old timer bug would have said dlq here after 20s
+    expect(deriveStates({ email: { status: 'sent' }, analytics: { status: 'recorded' } }).inventory).toBe('processing');
+  });
+
+  it('inventory stays pending until the fast consumers finish', () => {
+    expect(deriveStates({ email: { status: 'sent' } }).inventory).toBe('pending');
+  });
+
+  it('a present inventory row resolves done, not processing or dlq', () => {
+    const s = deriveStates({ email: { status: 'sent' }, analytics: { status: 'recorded' }, inventory: { status: 'reserved' } });
+    expect(s.inventory).toBe('done');
   });
 });

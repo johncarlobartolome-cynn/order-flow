@@ -23,36 +23,56 @@ const Alert = s(<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2
 function StateBadge({ st }: { st: ConsumerState }) {
   if (st === 'done') return <span className="state"><Check /><span>done</span></span>;
   if (st === 'dlq') return <span className="state"><Alert /><span>DLQ</span></span>;
+  if (st === 'processing') return <span className="state"><Spin className="spin" /><span>processing…</span></span>;
   return <span className="state"><Spin className="spin" /><span>pending</span></span>;
 }
 
 export default function App() {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [forceFailure, setForceFailure] = useState(false);
-  const [statuses, setStatuses] = useState<Record<string, unknown>>({});
+  const [statuses, setStatuses] = useState<Record<string, { status?: string }>>({});
   const [placing, setPlacing] = useState(false);
-  const [startTime, setStartTime] = useState(0);
-  const [now, setNow] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   async function submit() {
-    setPlacing(true); setStatuses({});
+    setPlacing(true);
+    setStatuses({});
+    setError(null);
+    setOrderId(null); // stop any previous poll before starting a new order
     try {
       const { orderId } = await placeOrder([{ sku: 'SKU-1', qty: 2 }], 'buyer@example.com', forceFailure);
-      const started = Date.now(); setStartTime(started); setNow(started); setOrderId(orderId);
-    } finally { setPlacing(false); }
+      setOrderId(orderId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not place the order. Please try again.');
+    } finally {
+      setPlacing(false);
+    }
   }
 
   useEffect(() => {
     if (!orderId) return;
+    let active = true;
     const t = setInterval(async () => {
-      setStatuses((await getStatus(orderId)).statuses);
-      setNow(Date.now());
+      try {
+        const { statuses } = await getStatus(orderId);
+        if (!active) return;
+        setStatuses(statuses);
+        setError(null); // recovered
+        const st = deriveStates(statuses);
+        const terminal =
+          CONSUMERS.every((c) => st[c] === 'done') || st.inventory === 'dlq';
+        if (terminal) clearInterval(t); // #4: don't poll forever after the order settles
+      } catch {
+        if (active) setError('Lost connection while checking status. Retrying…');
+      }
     }, 2000);
-    return () => clearInterval(t);
+    return () => {
+      active = false;
+      clearInterval(t);
+    };
   }, [orderId]);
 
-  const elapsed = orderId ? now - startTime : 0;
-  const states = deriveStates(statuses, forceFailure, elapsed);
+  const states = deriveStates(statuses);
   const done = CONSUMERS.filter((c) => states[c] === 'done').length;
   const dlq = states.inventory === 'dlq';
   const allDone = done === 3;
@@ -81,6 +101,8 @@ export default function App() {
           Force inventory failure
         </label>
       </div>
+
+      {error && <p className="error" role="alert">{error}</p>}
 
       {orderId && (
         <>

@@ -16,5 +16,5 @@ export async function placeOrder(items: OrderItem[], customerEmail: string, forc
 export async function getStatus(orderId: string) {
   const res = await fetch(`${API}/orders/${orderId}`);
   if (!res.ok) throw new Error(`status failed: ${res.status}`);
-  return (await res.json()) as { orderId: string; statuses: Record<string, unknown> };
+  return (await res.json()) as { orderId: string; statuses: Record<string, { status?: string }> };
 }
