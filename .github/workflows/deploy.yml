@@ -32,3 +32,6 @@ jobs:
 
       - name: Deploy
         run: npx cdk deploy --require-approval never
+
+      - name: E2E (against the deployed stack)
+        run: bash e2e/e2e.sh

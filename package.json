@@ -5,6 +5,7 @@
     "build": "tsc",
     "watch": "tsc -w",
     "test": "jest",
+    "test:e2e": "bash e2e/e2e.sh",
     "cdk": "cdk"
   },
   "devDependencies": {
